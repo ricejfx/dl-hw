@@ -4,6 +4,8 @@
 # Exclude all .pyc files
 *.pyc
 
+# Exclude the copies I made
+*orig*
 
 # Exclude specific directories
 homework2/logs/
