@@ -65,7 +65,7 @@ class NearestNeighborClassifier:
         Returns:
             normalized 2D tensor shape = x.shape
         """
-        return (x - self.data_mean) / self.data_std
+        return (x - self.data_mean)/self.data_std
 
     def get_nearest_neighbor(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
@@ -79,7 +79,7 @@ class NearestNeighborClassifier:
         """
         #raise NotImplementedError
         x = self.input_normalization(x)
-        idx = ((x-self.data_normalized) ** 2).sum(1).argmin()
+        idx = ((x - self.data_normalized)**2).sum(1).argmin()
         return self.data[idx], self.label[idx]
 
     def get_k_nearest_neighbor(self, x: torch.Tensor, k: int) -> tuple[torch.Tensor, torch.Tensor]:
@@ -97,7 +97,7 @@ class NearestNeighborClassifier:
         """
         #raise NotImplementedError
         x = self.input_normalization(x)
-        idx = ((x-self.data_normalized) ** 2).sum(1).topk(k, largest=False).indices
+        idx = ((x - self.data_normalized)**2).sum(1).topk(k, largest=False).indices
         return self.data[idx], self.label[idx]
 
     def knn_regression(self, x: torch.Tensor, k: int) -> torch.Tensor:
@@ -114,6 +114,6 @@ class NearestNeighborClassifier:
         """
         #raise NotImplementedError
         x = self.input_normalization(x)
-        idx = ((x-self.data_normalized) ** 2).sum(1).topk(k, largest=False).indices
+        idx = ((x - self.data_normalized)**2).sum(1).topk(k, largest=False).indices
         return self.label[idx].mean()
     
