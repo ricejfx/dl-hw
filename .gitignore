@@ -7,7 +7,12 @@
 # Exclude the copies I made
 *orig*
 
+# exlude images
+*.png
+*.jpg
+
 # Exclude specific directories
+homework2/classification_data/
 homework2/logs/
 homework2/log/
 homework2/run/
