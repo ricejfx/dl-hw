@@ -17,6 +17,7 @@ except:
     from utils import load_data
 
 import tqdm
+import os
 
 def train(
     exp_dir: str = "logs",
@@ -25,7 +26,6 @@ def train(
     lr: float = 1e-3,
     batch_size: int = 128,
     seed: int = 2024,
-    regularizer: float = 0.0,
     **kwargs
 ):
     if torch.cuda.is_available():
@@ -37,6 +37,7 @@ def train(
         print("CUDA not available, using CPU")
         device = torch.device("cpu")
 
+    print(f"{os.cpu_count()=}")
     # set random seed so each run is deterministic
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -45,17 +46,46 @@ def train(
     log_dir = Path(exp_dir) / f"{model_name}_{datetime.now().strftime('%m%d_%H%M%S')}"
     logger = tb.SummaryWriter(log_dir)
 
+    grader_run = True
+
+    if not grader_run:
+        # encode additional kwargs
+        if model_name == "linear":
+            pass
+        if model_name == "mlp":
+            pass
+        if model_name == "mlp_deep":
+            kwargs["optimizer"] = "sgd"
+            kwargs["regularizer"] = 0.0
+            kwargs["first_layer_dim"] = 128
+            kwargs["hidden_dim"] = [128, 64, 32]
+        if model_name == "mlp_deep_residual":
+            kwargs["regularizer"] = 0.0
+            kwargs["optimizer"] = "sgd"
+            kwargs["first_layer_dim"] = 128
+            kwargs["hidden_dim"] = [512, 128, 64]
+
     # note: the grader uses default kwargs, you'll have to bake them in for the final submission
     model = load_model(model_name, **kwargs)
     model = model.to(device)
     model.train()
 
-    train_data = load_data("classification_data/train", shuffle=True, batch_size=batch_size, num_workers=4)
-    val_data = load_data("classification_data/val", shuffle=False, num_workers=4)
+    #print(model)
+
+    train_data = load_data("classification_data/train", shuffle=True, batch_size=batch_size, num_workers=10)
+    val_data = load_data("classification_data/val", shuffle=False, num_workers=10)
 
     # create loss function and optimizer
     loss_func = ClassificationLoss()
-    optimizer = torch.optim.SGD(model.parameters(), lr=lr, momentum=0.9, weight_decay=regularizer)
+
+    if not grader_run:
+        if kwargs["optimizer"] == "adam":
+            optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=kwargs["regularizer"])
+        elif kwargs["optimizer"] == "sgd":
+            optimizer = torch.optim.SGD(model.parameters(), lr=lr, momentum=0.9, weight_decay=kwargs["regularizer"])
+
+    logger.add_text("Arguments", str({"exp_dir": exp_dir, "model_name": model_name, "num_epoch": num_epoch, "lr": lr, "batch_size": batch_size, "seed": seed}))
+    logger.add_text("Model kwargs", str(kwargs))
 
     global_step = 0
     metrics = {"train_acc": [], "val_acc": []}

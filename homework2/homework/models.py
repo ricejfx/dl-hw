@@ -111,8 +111,10 @@ class MLPClassifierDeep(nn.Module):
         h: int = 64,
         w: int = 64,
         num_classes: int = 6,
-        hidden_dim: int = 96,
-        num_layers: int = 4
+        first_layer_dim: int = 128,
+        hidden_dim: list = [128, 64, 32]#,
+        # optimizer: torch.optim.Optimizer = None,
+        # regularizer: float = None
     ):
         """
         An MLP with multiple hidden layers
@@ -129,10 +131,12 @@ class MLPClassifierDeep(nn.Module):
         super().__init__()
         layers = []
         layers.append(torch.nn.Flatten())
-        layers.append(torch.nn.Linear(h*w*3, hidden_dim))
-        for i in range(num_layers):
+        layers.append(torch.nn.Linear(h*w*3, first_layer_dim))
+        for i in range(len(hidden_dim)):
             layers.append(torch.nn.ReLU())
-            layers.append(torch.nn.Linear(hidden_dim, num_classes if (i+1)==num_layers else hidden_dim))
+            #layers.append(torch.nn.Linear(hidden_dim, num_classes if (i+1)==num_layers else hidden_dim))
+            layers.append(torch.nn.Linear(first_layer_dim if i==0 else hidden_dim[i],
+                                          num_classes if (i+1)==len(hidden_dim) else hidden_dim[i+1]))
 
         self.model = torch.nn.Sequential(*layers)
         #raise NotImplementedError("MLPClassifierDeep.__init__() is not implemented")
@@ -150,31 +154,37 @@ class MLPClassifierDeep(nn.Module):
 
 
 class MLPClassifierDeepResidual(nn.Module):
-    class MLPResidualBlock(nn.Module):
-        def __init__(self, in_channels: int, out_channels: int):
-            super(MLPClassifierDeepResidual.MLPResidualBlock, self).__init__()
-            
-            self.model = torch.nn.Sequential(
-                torch.nn.Linear(in_channels, out_channels),
-                torch.nn.ReLU(),
-                torch.nn.Linear(out_channels, out_channels),
-                torch.nn.ReLU()
-            )
+    if 1:
+        class MLPCDRBlock(nn.Module):
+            def __init__(self, in_channels: int, out_channels: int):
+                super(MLPClassifierDeepResidual.MLPCDRBlock, self).__init__()
+                
+                self.model = torch.nn.Sequential(
+                    torch.nn.Linear(in_channels, out_channels),
+                    torch.nn.LayerNorm(out_channels),
+                    torch.nn.ReLU(),
+                    torch.nn.Linear(out_channels, out_channels),
+                    torch.nn.LayerNorm(out_channels),
+                    torch.nn.ReLU()
+                )
 
-            if in_channels != out_channels:
-                self.skip = torch.nn.Linear(in_channels, out_channels)
-            else:
-                self.skip = torch.nn.Identity()
+                if in_channels != out_channels:
+                    self.skip = torch.nn.Linear(in_channels, out_channels)
+                else:
+                    self.skip = torch.nn.Identity()
 
-        def forward(self, x: torch.Tensor) -> torch.Tensor:
-            return self.model(x) + self.skip(x)
+            def forward(self, x: torch.Tensor) -> torch.Tensor:
+                return self.model(x) + self.skip(x)
     
     def __init__(
         self,
         h: int = 64,
         w: int = 64,
         num_classes: int = 6,
-        hidden_dim: list = [96, 96, 96, 96, 96]
+        first_layer_dim: int = 128,
+        hidden_dim: list = [512, 128, 64]#, [64, 64, 64],
+        #regularizer: float = None,
+        #optimizer: torch.optim.Optimizer = None
     ):
         """
         Args:
@@ -190,11 +200,14 @@ class MLPClassifierDeepResidual(nn.Module):
 
         layers = []
         layers.append(torch.nn.Flatten())
-        layers.append(torch.nn.Linear(h*w*3, hidden_dim[0], bias=False))
-        c = hidden_dim[0]
+        init_c = first_layer_dim
+        layers.append(torch.nn.Linear(h*w*3, init_c, bias=False))
+        #c = hidden_dim[0]
+        c = init_c
         
-        for s in hidden_dim[1:]:
-            layers.append(MLPClassifierDeepResidual.MLPResidualBlock(c, s))
+        #for s in hidden_dim[1:]:
+        for s in hidden_dim:
+            layers.append(MLPClassifierDeepResidual.MLPCDRBlock(c, s))
             c = s
         
         layers.append(torch.nn.Linear(c, num_classes, bias=False))
