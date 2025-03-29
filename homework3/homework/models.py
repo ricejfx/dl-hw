@@ -7,108 +7,191 @@ HOMEWORK_DIR = Path(__file__).resolve().parent
 INPUT_MEAN = [0.2788, 0.2657, 0.2629]
 INPUT_STD = [0.2064, 0.1944, 0.2252]
 
-
 class Classifier(nn.Module):
-    class ClassiferBlock(nn.Module):
-        def __init__(self, in_channels: int, out_channels: int):
-            super(Classifier).__init__()
-            pass
+    class DownBlock(nn.Module):
+        def __init__(self, in_channels : int = 3, out_channels : int = 6, ks : int = 3):
+            super().__init__()
+            self.model = nn.Sequential(
+                nn.Conv2d(in_channels, out_channels, kernel_size=ks, stride=2, padding=1),
+                nn.GroupNorm(1, out_channels),
+                nn.ReLU(),
+                nn.Conv2d(out_channels, out_channels, kernel_size=ks, padding=1),
+                nn.GroupNorm(1, out_channels),
+                nn.ReLU()
+            )
+        
+        def forward(self, x):
+            return self.model(x)
 
-            
-    def __init__(
-        self,
-        in_channels: int = 3,
-        num_classes: int = 6,
-    ):
-        """
-        A convolutional network for image classification.
+    class UpBlock(nn.Module):
+        def __init__(self, in_channels : int, out_channels : int, ks : int = 3):
+            super().__init__()
+            self.model = nn.Sequential(
+                nn.ConvTranspose2d(in_channels, out_channels, kernel_size=ks, stride=2, padding=1, output_padding=1),
+                nn.GroupNorm(1, out_channels),
+                nn.ReLU(),
+                nn.Conv2d(out_channels, out_channels, kernel_size=ks, padding=1),
+                nn.GroupNorm(1, out_channels),
+                nn.ReLU(),
+                nn.Dropout(p=0.1)
+            )
+        
+        def forward(self, x):
+            return self.model(x)
 
-        Args:
-            in_channels: int, number of input channels
-            num_classes: int
-        """
+    def __init__(self, in_channels: int = 3, num_classes: int = 6, ks: int = 3):
         super().__init__()
 
-        self.register_buffer("input_mean", torch.as_tensor(INPUT_MEAN))
-        self.register_buffer("input_std", torch.as_tensor(INPUT_STD))
+        # Downs
+        self.down1 = self.DownBlock(in_channels, 32)
+        self.down2 = self.DownBlock(32, 64)
+        self.down3 = self.DownBlock(64, 128)
 
-        # TODO: implement
-        pass
+        # Ups
+        self.up3 = self.UpBlock(128, 128)
+        self.up2 = self.UpBlock(128 + 64, 64)
+        self.up1 = self.UpBlock(64 + 32, 32)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            x: tensor (b, 3, h, w) image
+        # Put together the image processing block
+        # 32 channels, matching what I have below
+        self.img_proc = nn.Sequential(
+            nn.Conv2d(32 + in_channels, 32, kernel_size=ks, padding=1),
+            nn.GroupNorm(1, 32),
+            nn.ReLU(),
+            nn.Dropout(p=0.1),
+            nn.Conv2d(32, num_classes, kernel_size=1)
+        )
 
-        Returns:
-            tensor (b, num_classes) logits
-        """
-        # optional: normalizes the input
+        # Input normalization
+        self.register_buffer("input_mean", torch.tensor(INPUT_MEAN))
+        self.register_buffer("input_std", torch.tensor(INPUT_STD))
+
+        return None 
+
+    def forward(self, x):
         z = (x - self.input_mean[None, :, None, None]) / self.input_std[None, :, None, None]
+        # netowrk step            # expected tensor shape
+        d1 = self.down1(z)        # (B, 32, H/2, W/2)
+        d2 = self.down2(d1)       # (B, 64, H/4, W/4)
+        d3 = self.down3(d2)       # (B, 128, H/8, W/8)
 
-        # TODO: replace with actual forward pass
-        logits = torch.randn(x.size(0), 6)
+        # using cat since this give me more flexibility with the node size
 
-        return logits
+        u3 = self.up3(d3)                      # (B, 128, H/4, W/4)
+        u3 = torch.cat([u3, d2], dim=1)
 
-    def predict(self, x: torch.Tensor) -> torch.Tensor:
+        u2 = self.up2(u3)                     # (B, 64, H/2, W/2)
+        u2 = torch.cat([u2, d1], dim=1)
+
+        u1 = self.up1(u2)                     # (B, 32, H, W)
+        u1 = torch.cat([u1, z], dim=1)
+
+        return self.img_proc(u1).mean(dim=-1).mean(dim=-1)
+    
+    def predict(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
-        Used for inference, returns class labels
-        This is what the AccuracyMetric uses as input (this is what the grader will use!).
-        You should not have to modify this function.
+        Used for inference, takes an image and returns class labels and normalized depth.
+        This is what the metrics use as input (this is what the grader will use!).
 
         Args:
             x (torch.FloatTensor): image with shape (b, 3, h, w) and vals in [0, 1]
 
         Returns:
-            pred (torch.LongTensor): class labels {0, 1, ..., 5} with shape (b, h, w)
+            tuple of (torch.LongTensor, torch.FloatTensor):
+                - pred: class labels {0, 1, 2} with shape (b, h, w)
+                - depth: normalized depth [0, 1] with shape (b, h, w)
         """
-        return self(x).argmax(dim=1)
+        logits = self(x)
+        pred = logits.argmax(dim=1)
 
+        return pred
 
-class Detector(torch.nn.Module):
-    def __init__(
-        self,
-        in_channels: int = 3,
-        num_classes: int = 3,
-    ):
-        """
-        A single model that performs segmentation and depth regression
+class Detector(nn.Module):
+    class DownBlock(nn.Module):
+        def __init__(self, in_channels : int, out_channels : int, ks : int = 3):
+            super().__init__()
+            self.model = nn.Sequential(
+                nn.Conv2d(in_channels, out_channels, kernel_size=ks, stride=2, padding=1),
+                nn.GroupNorm(1, out_channels),
+                nn.ReLU(),
+                nn.Conv2d(out_channels, out_channels, kernel_size=ks, padding=1),
+                nn.GroupNorm(1, out_channels),
+                nn.ReLU()
+            )
+        
+        def forward(self, x):
+            return self.model(x)
 
-        Args:
-            in_channels: int, number of input channels
-            num_classes: int
-        """
+    class UpBlock(nn.Module):
+        def __init__(self, in_channels : int, out_channels : int, ks : int = 3):
+            super().__init__()
+            self.model = nn.Sequential(
+                nn.ConvTranspose2d(in_channels, out_channels, kernel_size=ks, stride=2, padding=1, output_padding=1),
+                nn.GroupNorm(1, out_channels),
+                nn.ReLU(),
+                nn.Conv2d(out_channels, out_channels, kernel_size=ks, padding=1),
+                nn.GroupNorm(1, out_channels),
+                nn.ReLU(),
+                nn.Dropout(p=0.1)
+            )
+        
+        def forward(self, x):
+            return self.model(x)
+
+    def __init__(self, in_channels: int = 3, num_classes: int = 3, ks: int = 3):
         super().__init__()
 
-        self.register_buffer("input_mean", torch.as_tensor(INPUT_MEAN))
-        self.register_buffer("input_std", torch.as_tensor(INPUT_STD))
+        # Downs
+        self.down1 = self.DownBlock(in_channels, 32)
+        self.down2 = self.DownBlock(32, 64)
+        self.down3 = self.DownBlock(64, 128)
 
-        # TODO: implement
-        pass
+        # Ups
+        self.up3 = self.UpBlock(128, 128)
+        self.up2 = self.UpBlock(128 + 64, 64)
+        self.up1 = self.UpBlock(64 + 32, 32)
 
-    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-        Used in training, takes an image and returns raw logits and raw depth.
-        This is what the loss functions use as input.
+        # Put together the image processing block
+        # 32 channels, matching what I have below
+        self.img_proc = nn.Sequential(
+            nn.Conv2d(32 + in_channels, 32, kernel_size=3, padding=1),
+            nn.GroupNorm(1, 32),
+            nn.ReLU(),
+            nn.Dropout(p=0.1)
+        )
 
-        Args:
-            x (torch.FloatTensor): image with shape (b, 3, h, w) and vals in [0, 1]
+        self.segmentation = nn.Conv2d(32, num_classes, kernel_size=1)
+        self.depth = nn.Conv2d(32, 1, kernel_size=1)
 
-        Returns:
-            tuple of (torch.FloatTensor, torch.FloatTensor):
-                - logits (b, num_classes, h, w)
-                - depth (b, h, w)
-        """
-        # optional: normalizes the input
+        # Input normalization
+        self.register_buffer("input_mean", torch.tensor(INPUT_MEAN))
+        self.register_buffer("input_std", torch.tensor(INPUT_STD))
+
+    def forward(self, x):
         z = (x - self.input_mean[None, :, None, None]) / self.input_std[None, :, None, None]
+        # netowrk step            # expected tensor shape
+        d1 = self.down1(z)        # (B, 32, H/2, W/2)
+        d2 = self.down2(d1)       # (B, 64, H/4, W/4)
+        d3 = self.down3(d2)       # (B, 128, H/8, W/8)
 
-        # TODO: replace with actual forward pass
-        logits = torch.randn(x.size(0), 3, x.size(2), x.size(3))
-        raw_depth = torch.rand(x.size(0), x.size(2), x.size(3))
+        # using cat since this give me more flexibility with the node size
 
-        return logits, raw_depth
+        u3 = self.up3(d3)                      # (B, 128, H/4, W/4)
+        u3 = torch.cat([u3, d2], dim=1)
 
+        u2 = self.up2(u3)                     # (B, 64, H/2, W/2)
+        u2 = torch.cat([u2, d1], dim=1)
+
+        u1 = self.up1(u2)                     # (B, 32, H, W)
+        u1 = torch.cat([u1, z], dim=1)
+
+        img = self.img_proc(u1)               # (B, 32, H, W)
+
+        logits = self.segmentation(img)         # (B, num_classes, H, W)
+        depth = self.depth(img).squeeze(1)      # (B, H, W)
+
+        return logits, depth
+    
     def predict(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Used for inference, takes an image and returns class labels and normalized depth.
@@ -130,12 +213,10 @@ class Detector(torch.nn.Module):
 
         return pred, depth
 
-
 MODEL_FACTORY = {
     "classifier": Classifier,
     "detector": Detector,
 }
-
 
 def load_model(
     model_name: str,
